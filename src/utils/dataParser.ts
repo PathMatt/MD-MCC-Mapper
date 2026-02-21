@@ -118,10 +118,11 @@ function processRows(
   }
 
   // Every column AFTER "MCCs" is an MCC Topic column
+  // Filter out blank headers and xlsx auto-generated __EMPTY placeholders
   const mccTopicHeaders = headers
     .slice(mccsIndex + 1)
     .map((h) => h.trim())
-    .filter((h) => h.length > 0);
+    .filter((h) => h.length > 0 && !h.startsWith("__EMPTY"));
 
   // Filter rows where Course or Outcome is empty
   const validRows = rows.filter((row) => {

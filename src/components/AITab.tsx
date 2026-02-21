@@ -11,21 +11,36 @@ interface AITabProps {
   outcomes: OutcomeRow[];
 }
 
+// Visually distinct colors for up to 10 clusters
 const CLUSTER_COLORS = [
-  "#4F2683",
-  "#82368C",
-  "#B45BC6",
-  "#6A3D9A",
-  "#9B59B6",
-  "#7D3C98",
-  "#A569BD",
-  "#5B2C6F",
-  "#D2B4DE",
-  "#8E44AD",
+  "#4F2683", // purple
+  "#E8590C", // orange-red
+  "#2B8A3E", // green
+  "#1971C2", // blue
+  "#E64980", // pink
+  "#0C8599", // teal
+  "#E67700", // amber
+  "#862E9C", // violet
+  "#5C940D", // lime green
+  "#D6336C", // rose
+];
+
+const CLUSTER_LABELS = [
+  "Cluster 1",
+  "Cluster 2",
+  "Cluster 3",
+  "Cluster 4",
+  "Cluster 5",
+  "Cluster 6",
+  "Cluster 7",
+  "Cluster 8",
+  "Cluster 9",
+  "Cluster 10",
 ];
 
 export default function AITab({ outcomes }: AITabProps) {
   const [k, setK] = useState(5);
+  const [expandedCluster, setExpandedCluster] = useState<number | null>(null);
 
   // Filter out outcomes with all-zero vectors
   const validOutcomes = useMemo(
@@ -80,7 +95,7 @@ export default function AITab({ outcomes }: AITabProps) {
 
   const { pcaData, clusters, effectiveK } = clusterResult;
 
-  // Build traces per cluster
+  // Build traces per cluster for scatter plot
   const traces = Array.from({ length: effectiveK }, (_, clusterIdx) => {
     const indices = clusters
       .map((c, i) => (c === clusterIdx ? i : -1))
@@ -91,12 +106,12 @@ export default function AITab({ outcomes }: AITabProps) {
       y: indices.map((i) => pcaData[i][1]),
       mode: "markers" as const,
       type: "scatter" as const,
-      name: `Cluster ${clusterIdx + 1}`,
+      name: `${CLUSTER_LABELS[clusterIdx]} (${indices.length})`,
       marker: {
-        size: 8,
+        size: 10,
         color: CLUSTER_COLORS[clusterIdx % CLUSTER_COLORS.length],
-        opacity: 0.8,
-        line: { width: 1, color: "#FFFFFF" },
+        opacity: 0.85,
+        line: { width: 1.5, color: "#FFFFFF" },
       },
       text: indices.map((i) => {
         const o = validOutcomes[i];
@@ -107,6 +122,20 @@ export default function AITab({ outcomes }: AITabProps) {
         return `<b>Course:</b> ${o.course}<br><b>Outcome:</b> ${o.outcomeText.substring(0, 80)}${o.outcomeText.length > 80 ? "..." : ""}<br><b>Topics:</b> ${topicsStr}`;
       }),
       hoverinfo: "text" as const,
+    };
+  });
+
+  // Group outcomes by cluster for the table
+  const clusterGroups = Array.from({ length: effectiveK }, (_, clusterIdx) => {
+    const members = clusters
+      .map((c, i) => (c === clusterIdx ? i : -1))
+      .filter((i) => i !== -1)
+      .map((i) => validOutcomes[i]);
+    return {
+      clusterIdx,
+      label: CLUSTER_LABELS[clusterIdx],
+      color: CLUSTER_COLORS[clusterIdx % CLUSTER_COLORS.length],
+      members,
     };
   });
 
@@ -167,6 +196,85 @@ export default function AITab({ outcomes }: AITabProps) {
           config={{ responsive: true, displayModeBar: true }}
           style={{ width: "100%" }}
         />
+      </div>
+
+      {/* Cluster membership table */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+        <h3 className="text-sm font-semibold text-western-text-header mb-3">
+          Cluster Membership
+        </h3>
+        <div className="space-y-2">
+          {clusterGroups.map((group) => (
+            <div
+              key={group.clusterIdx}
+              className="border border-gray-100 rounded-lg overflow-hidden"
+            >
+              {/* Cluster header - click to expand/collapse */}
+              <button
+                onClick={() =>
+                  setExpandedCluster((prev) =>
+                    prev === group.clusterIdx ? null : group.clusterIdx
+                  )
+                }
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50 transition-colors"
+              >
+                <span
+                  className="w-3 h-3 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: group.color }}
+                />
+                <span className="text-sm font-medium text-western-text-header">
+                  {group.label}
+                </span>
+                <span className="text-xs text-western-silver">
+                  {group.members.length} outcome
+                  {group.members.length !== 1 ? "s" : ""}
+                </span>
+                <span className="ml-auto text-xs text-western-silver">
+                  {expandedCluster === group.clusterIdx ? "▲" : "▼"}
+                </span>
+              </button>
+
+              {/* Expanded table */}
+              {expandedCluster === group.clusterIdx && (
+                <div className="border-t border-gray-100">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 text-western-text-body">
+                        <th className="text-left px-4 py-2 font-medium w-1/5">
+                          Course
+                        </th>
+                        <th className="text-left px-4 py-2 font-medium w-2/5">
+                          Outcome
+                        </th>
+                        <th className="text-left px-4 py-2 font-medium w-2/5">
+                          MCC Topics
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.members.map((member, idx) => (
+                        <tr
+                          key={idx}
+                          className="border-t border-gray-50 hover:bg-gray-50"
+                        >
+                          <td className="px-4 py-2 text-western-purple font-medium">
+                            {member.course}
+                          </td>
+                          <td className="px-4 py-2 text-western-text-body">
+                            {member.outcomeText}
+                          </td>
+                          <td className="px-4 py-2 text-western-silver">
+                            {member.mccTopicsPresent.join(", ")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

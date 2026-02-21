@@ -271,7 +271,13 @@ export default function Home() {
                   courses={data.courses}
                 />
               )}
-              {activeTab === "ai" && <AITab outcomes={data.outcomes} />}
+              {activeTab === "ai" && (
+                <AITab
+                  courseAggregations={data.courseAggregations}
+                  mccTopicHeaders={data.mccTopicHeaders}
+                  courses={data.courses}
+                />
+              )}
             </div>
           </div>
         )}

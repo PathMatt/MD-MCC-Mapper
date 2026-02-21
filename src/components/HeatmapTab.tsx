@@ -307,7 +307,7 @@ export default function HeatmapTab({
                 height: chartHeight,
                 paper_bgcolor: "white",
                 plot_bgcolor: "white",
-              } as Partial<Plotly.Layout>
+              } as unknown as Partial<Plotly.Layout>
             }
             config={{ responsive: true, displayModeBar: true }}
             style={{ width: "100%", height: chartHeight }}

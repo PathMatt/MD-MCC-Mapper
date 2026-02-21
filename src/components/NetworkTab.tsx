@@ -18,7 +18,7 @@ interface NetworkTabProps {
 }
 
 // After d3 simulation, source/target become objects
-interface SimLink extends GraphLink {
+interface SimLink extends Omit<GraphLink, "source" | "target"> {
   source: string | { id: string };
   target: string | { id: string };
 }

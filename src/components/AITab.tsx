@@ -5,61 +5,77 @@ import Plot from "react-plotly.js";
 import type Plotly from "plotly.js";
 import { PCA } from "ml-pca";
 import { kmeans } from "ml-kmeans";
-import type { OutcomeRow } from "@/types";
+import type { CourseAggregation } from "@/types";
 
 interface AITabProps {
-  outcomes: OutcomeRow[];
+  courseAggregations: CourseAggregation[];
+  mccTopicHeaders: string[];
+  courses: string[];
 }
 
-// Visually distinct colors for up to 10 clusters
+// Western University–inspired palette for clusters
 const CLUSTER_COLORS = [
-  "#4F2683", // purple
-  "#E8590C", // orange-red
-  "#2B8A3E", // green
-  "#1971C2", // blue
-  "#E64980", // pink
-  "#0C8599", // teal
-  "#E67700", // amber
-  "#862E9C", // violet
-  "#5C940D", // lime green
+  "#4F2683", // western purple
+  "#0C8599", // muted teal
+  "#82368C", // magenta-purple
+  "#2B8A3E", // forest green
+  "#E8590C", // burnt orange
+  "#1971C2", // cobalt blue
+  "#D4820A", // amber
   "#D6336C", // rose
 ];
 
-const CLUSTER_LABELS = [
-  "Cluster 1",
-  "Cluster 2",
-  "Cluster 3",
-  "Cluster 4",
-  "Cluster 5",
-  "Cluster 6",
-  "Cluster 7",
-  "Cluster 8",
-  "Cluster 9",
-  "Cluster 10",
-];
-
-export default function AITab({ outcomes }: AITabProps) {
+export default function AITab({
+  courseAggregations,
+  mccTopicHeaders,
+  courses,
+}: AITabProps) {
   const [k, setK] = useState(5);
   const [expandedCluster, setExpandedCluster] = useState<number | null>(null);
 
-  // Filter out outcomes with all-zero vectors
-  const validOutcomes = useMemo(
-    () => outcomes.filter((o) => o.mccVector.some((v) => v === 1)),
-    [outcomes]
-  );
+  // ── Step 1: Build Topic × Course matrix & normalize ──────────────
+  const topicData = useMemo(() => {
+    // For each topic, get raw counts per course
+    const rows: {
+      topic: string;
+      rawCounts: number[];
+      totalFreq: number;
+      normalized: number[];
+    }[] = [];
 
+    for (const topic of mccTopicHeaders) {
+      const rawCounts = courses.map((course) => {
+        const agg = courseAggregations.find((ca) => ca.course === course);
+        return agg?.topicCounts[topic] || 0;
+      });
+
+      const totalFreq = rawCounts.reduce((s, v) => s + v, 0);
+
+      // Skip topics with zero total (can't normalize)
+      if (totalFreq === 0) continue;
+
+      // Normalize row to proportions (course fingerprint)
+      const normalized = rawCounts.map((c) => c / totalFreq);
+
+      rows.push({ topic, rawCounts, totalFreq, normalized });
+    }
+
+    return rows;
+  }, [courseAggregations, mccTopicHeaders, courses]);
+
+  // ── Step 2: PCA + K-Means ────────────────────────────────────────
   const clusterResult = useMemo(() => {
-    if (validOutcomes.length < 3) return null;
+    if (topicData.length < 3) return null;
 
     try {
-      const X = validOutcomes.map((o) => o.mccVector);
+      const X = topicData.map((t) => t.normalized);
 
       // PCA down to 2 components
       const pca = new PCA(X);
       const pcaData = pca.predict(X, { nComponents: 2 }).to2DArray();
 
-      // KMeans clustering
-      const effectiveK = Math.min(k, validOutcomes.length);
+      // K-Means clustering
+      const effectiveK = Math.min(k, topicData.length);
       const result = kmeans(pcaData, effectiveK, {
         initialization: "kmeans++",
       });
@@ -73,13 +89,14 @@ export default function AITab({ outcomes }: AITabProps) {
       console.error("Clustering error:", err);
       return null;
     }
-  }, [validOutcomes, k]);
+  }, [topicData, k]);
 
-  if (validOutcomes.length < 3) {
+  // ── Early returns ────────────────────────────────────────────────
+  if (topicData.length < 3) {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center text-western-silver">
-        Not enough outcomes with MCC topic mappings to perform clustering.
-        At least 3 non-zero outcomes are required.
+        Not enough MCC topics with data to perform clustering. At least 3
+        non-zero topics are required.
       </div>
     );
   }
@@ -95,7 +112,17 @@ export default function AITab({ outcomes }: AITabProps) {
 
   const { pcaData, clusters, effectiveK } = clusterResult;
 
-  // Build traces per cluster for scatter plot
+  // ── Compute max frequency for dot sizing ─────────────────────────
+  const maxFreq = Math.max(...topicData.map((t) => t.totalFreq));
+  const minDot = 6;
+  const maxDot = 28;
+
+  function dotSize(freq: number): number {
+    if (maxFreq <= 1) return minDot;
+    return minDot + ((freq - 1) / (maxFreq - 1)) * (maxDot - minDot);
+  }
+
+  // ── Build scatter traces per cluster ─────────────────────────────
   const traces = Array.from({ length: effectiveK }, (_, clusterIdx) => {
     const indices = clusters
       .map((c, i) => (c === clusterIdx ? i : -1))
@@ -106,41 +133,64 @@ export default function AITab({ outcomes }: AITabProps) {
       y: indices.map((i) => pcaData[i][1]),
       mode: "markers" as const,
       type: "scatter" as const,
-      name: `${CLUSTER_LABELS[clusterIdx]} (${indices.length})`,
+      name: `Cluster ${clusterIdx + 1} (${indices.length})`,
       marker: {
-        size: 10,
+        size: indices.map((i) => dotSize(topicData[i].totalFreq)),
         color: CLUSTER_COLORS[clusterIdx % CLUSTER_COLORS.length],
         opacity: 0.85,
         line: { width: 1.5, color: "#FFFFFF" },
       },
       text: indices.map((i) => {
-        const o = validOutcomes[i];
-        const topicsStr =
-          o.mccTopicsPresent.length > 5
-            ? o.mccTopicsPresent.slice(0, 5).join(", ") + "..."
-            : o.mccTopicsPresent.join(", ");
-        return `<b>Course:</b> ${o.course}<br><b>Outcome:</b> ${o.outcomeText.substring(0, 80)}${o.outcomeText.length > 80 ? "..." : ""}<br><b>Topics:</b> ${topicsStr}`;
+        const t = topicData[i];
+        // Find top 2 courses by proportion
+        const courseProportions = courses
+          .map((c, ci) => ({ course: c, pct: t.normalized[ci] * 100 }))
+          .sort((a, b) => b.pct - a.pct)
+          .slice(0, 2);
+
+        const topCoursesStr = courseProportions
+          .map((cp) => `${cp.course}: ${cp.pct.toFixed(0)}%`)
+          .join("<br>");
+
+        return `<b>${t.topic}</b><br>Cluster ${clusterIdx + 1}<br>Total frequency: ${t.totalFreq}<br>${topCoursesStr}`;
       }),
       hoverinfo: "text" as const,
     };
   });
 
-  // Group outcomes by cluster for the table
-  const clusterGroups = Array.from({ length: effectiveK }, (_, clusterIdx) => {
-    const members = clusters
+  // ── Build cluster card data ──────────────────────────────────────
+  const clusterCards = Array.from({ length: effectiveK }, (_, clusterIdx) => {
+    const indices = clusters
       .map((c, i) => (c === clusterIdx ? i : -1))
-      .filter((i) => i !== -1)
-      .map((i) => validOutcomes[i]);
+      .filter((i) => i !== -1);
+
+    const members = indices.map((i) => topicData[i]);
+
+    // Compute dominant courses: average normalized proportions within cluster
+    const avgProportions = courses.map((_, ci) => {
+      if (members.length === 0) return 0;
+      return (
+        members.reduce((sum, m) => sum + m.normalized[ci], 0) / members.length
+      );
+    });
+
+    // Top 2 dominant courses
+    const dominantCourses = courses
+      .map((c, ci) => ({ course: c, avg: avgProportions[ci] * 100 }))
+      .sort((a, b) => b.avg - a.avg)
+      .slice(0, 2);
+
     return {
       clusterIdx,
-      label: CLUSTER_LABELS[clusterIdx],
       color: CLUSTER_COLORS[clusterIdx % CLUSTER_COLORS.length],
       members,
+      dominantCourses,
     };
   });
 
   return (
     <div className="space-y-4">
+      {/* K slider */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <label className="flex items-center gap-3 text-sm text-western-text-body">
           <span className="whitespace-nowrap font-medium">
@@ -148,8 +198,8 @@ export default function AITab({ outcomes }: AITabProps) {
           </span>
           <input
             type="range"
-            min={2}
-            max={10}
+            min={3}
+            max={8}
             value={k}
             onChange={(e) => setK(Number(e.target.value))}
             className="flex-1 accent-western-purple"
@@ -159,38 +209,49 @@ export default function AITab({ outcomes }: AITabProps) {
           </span>
         </label>
         <p className="text-xs text-western-silver mt-1">
-          Clustering {validOutcomes.length} outcomes (
-          {outcomes.length - validOutcomes.length} skipped with no MCC topics)
+          Clustering {topicData.length} MCC topics by course distribution
+          fingerprint
+          {mccTopicHeaders.length - topicData.length > 0 &&
+            ` (${mccTopicHeaders.length - topicData.length} zero-frequency topics skipped)`}
         </p>
       </div>
 
+      {/* Constellation scatter plot */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-2">
         <Plot
           data={traces}
           layout={
             {
               title: {
-                text: "Outcome Clusters (PCA + K-Means)",
+                text: "MCC Topic Clusters by Course Distribution",
                 font: { color: "#2F2E33", size: 16 },
               },
               xaxis: {
-                title: { text: "Principal Component 1" },
-                gridcolor: "#F4F4F6",
-                zerolinecolor: "#E0E0E0",
+                showgrid: false,
+                zeroline: false,
+                showticklabels: false,
+                title: { text: "" },
               },
               yaxis: {
-                title: { text: "Principal Component 2" },
-                gridcolor: "#F4F4F6",
-                zerolinecolor: "#E0E0E0",
+                showgrid: false,
+                zeroline: false,
+                showticklabels: false,
+                title: { text: "" },
               },
               height: 600,
               paper_bgcolor: "white",
-              plot_bgcolor: "white",
+              plot_bgcolor: "#FAFAFA",
               legend: {
                 orientation: "h",
-                y: -0.15,
+                y: -0.08,
+                font: { size: 11, color: "#807F83" },
               },
-              margin: { t: 60, b: 80 },
+              margin: { t: 60, b: 60, l: 40, r: 40 },
+              hoverlabel: {
+                bgcolor: "#2F2E33",
+                font: { color: "#FFFFFF", size: 12 },
+                bordercolor: "transparent",
+              },
             } as Partial<Plotly.Layout>
           }
           config={{ responsive: true, displayModeBar: true }}
@@ -198,83 +259,88 @@ export default function AITab({ outcomes }: AITabProps) {
         />
       </div>
 
-      {/* Cluster membership table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <h3 className="text-sm font-semibold text-western-text-header mb-3">
-          Cluster Membership
-        </h3>
-        <div className="space-y-2">
-          {clusterGroups.map((group) => (
+      {/* Cluster cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {clusterCards.map((card) => (
+          <div
+            key={card.clusterIdx}
+            className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
+          >
+            {/* Card header */}
             <div
-              key={group.clusterIdx}
-              className="border border-gray-100 rounded-lg overflow-hidden"
+              className="px-4 py-3 flex items-center justify-between"
+              style={{ borderBottom: `3px solid ${card.color}` }}
             >
-              {/* Cluster header - click to expand/collapse */}
-              <button
-                onClick={() =>
-                  setExpandedCluster((prev) =>
-                    prev === group.clusterIdx ? null : group.clusterIdx
-                  )
-                }
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50 transition-colors"
+              <div>
+                <h4
+                  className="text-sm font-semibold"
+                  style={{ color: card.color }}
+                >
+                  Cluster {card.clusterIdx + 1}
+                </h4>
+                <p className="text-xs text-western-silver mt-0.5">
+                  {card.dominantCourses
+                    .map(
+                      (dc) => `${dc.course} (${dc.avg.toFixed(0)}%)`
+                    )
+                    .join(" · ")}
+                </p>
+              </div>
+              <span
+                className="text-xs font-medium px-2 py-0.5 rounded-full"
+                style={{
+                  backgroundColor: card.color + "18",
+                  color: card.color,
+                }}
               >
-                <span
-                  className="w-3 h-3 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: group.color }}
-                />
-                <span className="text-sm font-medium text-western-text-header">
-                  {group.label}
-                </span>
-                <span className="text-xs text-western-silver">
-                  {group.members.length} outcome
-                  {group.members.length !== 1 ? "s" : ""}
-                </span>
-                <span className="ml-auto text-xs text-western-silver">
-                  {expandedCluster === group.clusterIdx ? "▲" : "▼"}
-                </span>
-              </button>
+                {card.members.length} topic
+                {card.members.length !== 1 ? "s" : ""}
+              </span>
+            </div>
 
-              {/* Expanded table */}
-              {expandedCluster === group.clusterIdx && (
-                <div className="border-t border-gray-100">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="bg-gray-50 text-western-text-body">
-                        <th className="text-left px-4 py-2 font-medium w-1/5">
-                          Course
-                        </th>
-                        <th className="text-left px-4 py-2 font-medium w-2/5">
-                          Outcome
-                        </th>
-                        <th className="text-left px-4 py-2 font-medium w-2/5">
-                          MCC Topics
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.members.map((member, idx) => (
-                        <tr
-                          key={idx}
-                          className="border-t border-gray-50 hover:bg-gray-50"
-                        >
-                          <td className="px-4 py-2 text-western-purple font-medium">
-                            {member.course}
-                          </td>
-                          <td className="px-4 py-2 text-western-text-body">
-                            {member.outcomeText}
-                          </td>
-                          <td className="px-4 py-2 text-western-silver">
-                            {member.mccTopicsPresent.join(", ")}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            {/* Topic pills */}
+            <div className="px-4 py-3">
+              <div className="flex flex-wrap gap-1.5">
+                {card.members
+                  .sort((a, b) => b.totalFreq - a.totalFreq)
+                  .slice(0, expandedCluster === card.clusterIdx ? undefined : 8)
+                  .map((member) => (
+                    <span
+                      key={member.topic}
+                      className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border"
+                      style={{
+                        borderColor: card.color + "40",
+                        color: "#2F2E33",
+                        backgroundColor: card.color + "0A",
+                      }}
+                      title={`Total frequency: ${member.totalFreq}`}
+                    >
+                      {member.topic}
+                      <span
+                        className="text-[10px] opacity-60"
+                      >
+                        ({member.totalFreq})
+                      </span>
+                    </span>
+                  ))}
+              </div>
+              {card.members.length > 8 && (
+                <button
+                  onClick={() =>
+                    setExpandedCluster((prev) =>
+                      prev === card.clusterIdx ? null : card.clusterIdx
+                    )
+                  }
+                  className="text-xs mt-2 text-western-purple hover:underline"
+                >
+                  {expandedCluster === card.clusterIdx
+                    ? "Show less"
+                    : `+${card.members.length - 8} more topics`}
+                </button>
               )}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
     </div>
   );
